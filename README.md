@@ -1,2 +1,8 @@
-# Desert-Movement-Game-Prototype
-A movement game I'm making (see README)
+# Desert Movement Game Prototype
+So this started as a fast paced FPS shooter with fun movement. I made a testing world that was pretty big and started developing the movement. But since it was so big I started making abilities that were more fun in an open environment instead of the indoor setting I was planning for. Because of this, I pivoted to having the game set outdoors.
+# The Current Goal
+The current direction the game is going is towards an exploration game set in a desert with dunes as far as the eye can see. I want to have some goal like finding underground locations or ruined cities. I could turn this into some sort of extraction shooter but I'm still figuring it out. If there was a shooting aspect to the game it could be pretty fun because the more you move the more obvious it is where you are in the world and people could snipe you or something. 
+# Current State + More
+The current state has a default map which is pretty big and has minimal textures. I'm locking in on the movement abilities and just trying to make them not glitchy and smooth to use (spoiler alert, it will forever be glitchy). Please send suggestions for abilities and things to add/fix. I'm mainly making this repo so other people at K.I. can work on this but you all can use this code. It's really glitchy right now so don't freak out. I also don't have any models made so don't get angry at the player capsule 8(. When you download the files it might be called "Test fps 1" because that was the name of the unity project.
+
+I will definitely edit this in the future so if something in this isn't accurate to the current game it will probably be changed in the future. 
