@@ -887,14 +887,13 @@ MonoBehaviour:
   jumpHeight: 1.5
   maxJumps: 2
   gravity: -9.81
-  glideGravityMultiplier: 0.2
-  glideMaxFallSpeed: 10
-  glideLookDownSpeedMultiplier: 15
-  glideMaxHorizontalSpeed: 20
-  glideDiveAcceleration: 12
-  glidePullUpRate: 1.5
-  glideLiftEfficiency: 0.8
-  glideMinimumPullUpSpeed: 5
+  glideSteering: 3
+  glideStallSpeed: 8
+  glideAirDrag: 0.04
+  glideSpeedDrag: 0.002
+  glideSpeedLimit: 65
+  glideBrakeDrag: 1.2
+  airAcceleration: 3
   wallCheckDistance: 0.6
   wallRunSpeed: 7
   wallRunGravityMultiplier: 0.25
@@ -903,8 +902,11 @@ MonoBehaviour:
   wallJumpSideForce: 5
   wallRunTilt: 12
   grappleHeight: 9.144
-  grapplePullSpeed: 10
+  grapplePullSpeed: 30
   grappleStopDistance: 0.5
+  grappleArrivalTolerance: 0.02
+  grappleStuckTimeout: 0.2
+  grappleMaxDuration: 15
   playerCamera: {fileID: 0}
   sprintFov: 85
   fovTransitionSpeed: 8
