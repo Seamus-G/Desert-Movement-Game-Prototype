@@ -36,6 +36,26 @@ public class PlayerMovement : MonoBehaviour
     [Min(0.01f)] public float grappleArrivalTolerance = 0.02f;
     [Min(0.05f)] public float grappleStuckTimeout = 0.2f;
     [Min(0.1f)] public float grappleMaxDuration = 15f;
+    [Tooltip("Seconds after a grapple ends or is cancelled before Q can start another.")]
+    [Min(0f)] public float grappleCooldown = 5f;
+
+    [Header("Dash - F + movement direction, or forward with no input")]
+    [Min(0f)] public float dashSpeed = 26f;
+    [Min(0.01f)] public float groundDashDuration = 0.22f;
+    [Min(0f)] public float dashCooldown = 2f;
+    [Tooltip("Extra airspeed from dashing with the glider deployed.")]
+    [Min(0f)] public float glideDashBoost = 10f;
+
+    [Header("Charged leap - hold C on the ground, release to launch")]
+    [Min(0.01f)] public float leapChargeTime = 0.7f;
+    [Min(0f)] public float leapMinHeight = 2.5f;
+    [Min(0f)] public float leapMaxHeight = 8f;
+    [Min(0f)] public float leapForwardSpeed = 16f;
+    [Min(0f)] public float leapCooldown = 3f;
+    [Range(0f, 1f)] public float leapChargeMoveMultiplier = 0.55f;
+
+    [Header("Camera and ability display")]
+    public bool showAbilityHUD = true;
 
     public Camera playerCamera;
     public float sprintFov = 85f;
@@ -53,9 +73,16 @@ public class PlayerMovement : MonoBehaviour
     private Vector3 grappleVelocity;
     private Vector3 glideVelocity;
     private Vector3 horizontalVelocity;
-    private bool hasGrappleMomentum;
+    private bool hasLaunchMomentum;
     private float grappleElapsed;
     private float grappleBlockedTime;
+    private float grappleCooldownRemaining;
+    private float dashCooldownRemaining;
+    private float groundDashRemaining;
+    private float leapCooldownRemaining;
+    private float leapCharge;
+    private GUIStyle abilityTextStyle;
+    private GUIStyle abilityHintStyle;
     private bool wallIsOnRight;
     private Vector3 wallNormal;
     private readonly RaycastHit[] groundHits = new RaycastHit[8];
@@ -75,14 +102,21 @@ public class PlayerMovement : MonoBehaviour
     {
         TickMovement(new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical")),
             Input.GetKey(KeyCode.LeftShift), Input.GetButtonDown("Jump"),
-            Input.GetKeyDown(KeyCode.E), Input.GetKeyDown(KeyCode.Q), Time.deltaTime);
+            Input.GetKeyDown(KeyCode.E), Input.GetKeyDown(KeyCode.Q), Time.deltaTime,
+            Input.GetKeyDown(KeyCode.F), Input.GetKey(KeyCode.C));
     }
 
     private void TickMovement(Vector2 movementInput, bool sprintHeld, bool jumpPressed,
-        bool glidePressed, bool grapplePressed, float deltaTime)
+        bool glidePressed, bool grapplePressed, float deltaTime,
+        bool dashPressed = false, bool leapHeld = false)
     {
         if (deltaTime <= 0f || !controller.enabled)
             return;
+
+        grappleCooldownRemaining = TickCooldown(grappleCooldownRemaining, deltaTime);
+        dashCooldownRemaining = TickCooldown(dashCooldownRemaining, deltaTime);
+        leapCooldownRemaining = TickCooldown(leapCooldownRemaining, deltaTime);
+        groundDashRemaining = TickCooldown(groundDashRemaining, deltaTime);
 
         if (grapplePressed)
         {
@@ -111,13 +145,29 @@ public class PlayerMovement : MonoBehaviour
 
         if (grounded)
         {
-            hasGrappleMomentum = false;
+            hasLaunchMomentum = false;
             verticalSpeed = -2f;
             isWallRunning = false;
             isGliding = false;
             jumpsRemaining = maxJumps;
             glideVelocity = Vector3.zero;
-            horizontalVelocity = desiredHorizontal;
+            if (groundDashRemaining <= 0f)
+                horizontalVelocity = desiredHorizontal;
+        }
+
+        // Charging deliberately slows ground movement. Leaving the ground, grappling,
+        // or using another ability cancels the charge rather than creating an air jump.
+        if (!grounded || jumpPressed || dashPressed || leapCooldownRemaining > 0f || groundDashRemaining > 0f)
+            leapCharge = 0f;
+        else if (leapHeld)
+        {
+            leapCharge = Mathf.Min(leapCharge + deltaTime, Mathf.Max(0.01f, leapChargeTime));
+            horizontalVelocity *= leapChargeMoveMultiplier;
+        }
+        else if (leapCharge > 0f)
+        {
+            LaunchChargedLeap(inputDirection);
+            grounded = false;
         }
 
         if (jumpPressed && isWallRunning)
@@ -130,7 +180,7 @@ public class PlayerMovement : MonoBehaviour
         else if (jumpPressed && !grounded && hasWall)
         {
             StopGliding();
-            hasGrappleMomentum = false;
+            hasLaunchMomentum = false;
             isWallRunning = true;
             wallIsOnRight = wallOnRight;
             wallNormal = wallHit.normal;
@@ -140,6 +190,8 @@ public class PlayerMovement : MonoBehaviour
             StopGliding();
             verticalSpeed = Mathf.Sqrt(jumpHeight * -2f * gravity);
             jumpsRemaining = grounded ? maxJumps - 1 : jumpsRemaining - 1;
+            if (groundDashRemaining > 0f)
+                hasLaunchMomentum = true;
         }
 
         if (isWallRunning && !hasWall)
@@ -157,6 +209,9 @@ public class PlayerMovement : MonoBehaviour
             }
         }
 
+        if (dashPressed)
+            TryDash(movementInput, grounded);
+
         if (isGliding)
         {
             Transform aim = playerCamera != null ? playerCamera.transform : transform;
@@ -170,7 +225,7 @@ public class PlayerMovement : MonoBehaviour
             if ((glideCollision & CollisionFlags.Below) != 0)
             {
                 StopGliding();
-                hasGrappleMomentum = false;
+                hasLaunchMomentum = false;
                 verticalSpeed = -2f;
                 jumpsRemaining = maxJumps;
             }
@@ -192,7 +247,7 @@ public class PlayerMovement : MonoBehaviour
             {
                 if (!grounded)
                 {
-                    if (!hasGrappleMomentum)
+                    if (!hasLaunchMomentum)
                         horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, desiredHorizontal,
                             airAcceleration * deltaTime);
                     else if (inputDirection.sqrMagnitude > 0.001f)
@@ -216,12 +271,66 @@ public class PlayerMovement : MonoBehaviour
                 verticalSpeed = 0f;
             if ((collision & CollisionFlags.Below) != 0 && verticalSpeed < 0f)
             {
-                hasGrappleMomentum = false;
+                hasLaunchMomentum = false;
                 verticalSpeed = -2f;
                 jumpsRemaining = maxJumps;
             }
         }
-        UpdateCamera(isSprinting, deltaTime);
+        UpdateCamera(isSprinting || groundDashRemaining > 0f, deltaTime);
+    }
+
+    private static float TickCooldown(float remaining, float deltaTime)
+    {
+        // Avoid a floating-point sliver keeping an ability locked for an extra frame.
+        float next = remaining - deltaTime;
+        return next < 0.0001f ? 0f : next;
+    }
+
+    private void TryDash(Vector2 movementInput, bool grounded)
+    {
+        if (dashCooldownRemaining > 0f || isGrappling || dashSpeed <= 0f)
+            return;
+
+        Vector3 direction = transform.right * movementInput.x + transform.forward * movementInput.y;
+        if (direction.sqrMagnitude < 0.01f)
+            direction = transform.forward;
+        direction = Vector3.ProjectOnPlane(direction, Vector3.up).normalized;
+
+        if (isGliding)
+        {
+            Transform aim = playerCamera != null ? playerCamera.transform : transform;
+            Vector3 flightDirection = movementInput.sqrMagnitude > 0.01f
+                ? aim.right * movementInput.x + aim.forward * movementInput.y : aim.forward;
+            glideVelocity = Vector3.ClampMagnitude(glideVelocity + flightDirection.normalized * glideDashBoost,
+                Mathf.Max(1f, glideSpeedLimit));
+            horizontalVelocity = Vector3.ProjectOnPlane(glideVelocity, Vector3.up);
+            verticalSpeed = glideVelocity.y;
+        }
+        else
+        {
+            horizontalVelocity = direction * Mathf.Max(dashSpeed, horizontalVelocity.magnitude);
+            // A dash does not reset falling speed: it cannot suspend the player in air.
+            hasLaunchMomentum = true;
+            groundDashRemaining = grounded ? groundDashDuration : 0f;
+        }
+        isWallRunning = false;
+        leapCharge = 0f;
+        dashCooldownRemaining = Mathf.Max(0f, dashCooldown);
+    }
+
+    private void LaunchChargedLeap(Vector3 inputDirection)
+    {
+        float charge = Mathf.Clamp01(leapCharge / Mathf.Max(0.01f, leapChargeTime));
+        float height = Mathf.Lerp(leapMinHeight, Mathf.Max(leapMinHeight, leapMaxHeight), charge);
+        Vector3 direction = inputDirection.sqrMagnitude > 0.01f ? inputDirection.normalized : transform.forward;
+        direction = Vector3.ProjectOnPlane(direction, Vector3.up).normalized;
+        float launchSpeed = Mathf.Lerp(speed, leapForwardSpeed, charge);
+        horizontalVelocity = direction * Mathf.Max(horizontalVelocity.magnitude, launchSpeed);
+        verticalSpeed = Mathf.Sqrt(2f * Mathf.Abs(gravity) * Mathf.Max(0f, height));
+        hasLaunchMomentum = true;
+        jumpsRemaining = Mathf.Max(0, maxJumps - 1);
+        leapCharge = 0f;
+        leapCooldownRemaining = Mathf.Max(0f, leapCooldown);
     }
 
     private CollisionFlags SnapToGround(float deltaTime)
@@ -298,10 +407,12 @@ public class PlayerMovement : MonoBehaviour
 
     private void StartGrapple()
     {
-        if (grapplePullSpeed <= 0f || grappleHeight <= 0f)
+        if (isGrappling || grappleCooldownRemaining > 0f || grapplePullSpeed <= 0f || grappleHeight <= 0f)
             return;
         StopGliding();
-        hasGrappleMomentum = false;
+        leapCharge = 0f;
+        groundDashRemaining = 0f;
+        hasLaunchMomentum = false;
         isGrappling = true;
         isWallRunning = false;
         Transform aim = playerCamera != null ? playerCamera.transform : transform;
@@ -354,10 +465,13 @@ public class PlayerMovement : MonoBehaviour
 
     private void StopGrapple()
     {
+        if (!isGrappling)
+            return;
         isGrappling = false;
+        grappleCooldownRemaining = Mathf.Max(0f, grappleCooldown);
         horizontalVelocity = Vector3.ProjectOnPlane(grappleVelocity, Vector3.up);
         verticalSpeed = grappleVelocity.y;
-        hasGrappleMomentum = grappleVelocity.sqrMagnitude > 0.001f;
+        hasLaunchMomentum = grappleVelocity.sqrMagnitude > 0.001f;
         grappleVelocity = Vector3.zero;
         grappleElapsed = 0f;
         grappleBlockedTime = 0f;
@@ -381,14 +495,17 @@ public class PlayerMovement : MonoBehaviour
             if (intoSurface < 0f)
                 glideVelocity -= hit.normal * intoSurface;
         }
-        else if (hasGrappleMomentum && Mathf.Abs(hit.normal.y) < 0.2f)
+        else if ((hasLaunchMomentum || groundDashRemaining > 0f) && Mathf.Abs(hit.normal.y) < 0.2f)
         {
             // A launched player loses momentum into a wall, while ordinary ground
             // movement continues to use the controller's slope/step handling.
             Vector3 wallDirection = Vector3.ProjectOnPlane(hit.normal, Vector3.up).normalized;
             float intoSurface = Vector3.Dot(horizontalVelocity, wallDirection);
             if (intoSurface < 0f)
+            {
                 horizontalVelocity -= wallDirection * intoSurface;
+                groundDashRemaining = 0f;
+            }
         }
         // Walking uses CharacterController's slope/step resolution. Projecting its
         // velocity here turns uphill contact into a jump and leaks air steering
@@ -410,16 +527,49 @@ public class PlayerMovement : MonoBehaviour
 
     private void OnDisable()
     {
+        // Disabling the component must not bypass the grapple's release cooldown.
+        if (isGrappling)
+            StopGrapple();
         isGrappling = false;
         isGliding = false;
         isWallRunning = false;
         grappleVelocity = Vector3.zero;
         glideVelocity = Vector3.zero;
         horizontalVelocity = Vector3.zero;
-        hasGrappleMomentum = false;
+        hasLaunchMomentum = false;
         verticalSpeed = 0f;
+        groundDashRemaining = 0f;
+        leapCharge = 0f;
         if (mouseLook != null)
             mouseLook.wallRunTilt = 0f;
+    }
+
+    private void OnGUI()
+    {
+        if (!showAbilityHUD || playerCamera == null)
+            return;
+        if (abilityTextStyle == null)
+        {
+            abilityTextStyle = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold };
+            abilityTextStyle.normal.textColor = Color.white;
+            abilityHintStyle = new GUIStyle(GUI.skin.label) { fontSize = 12 };
+            abilityHintStyle.normal.textColor = new Color(0.8f, 0.87f, 0.94f);
+        }
+        float y = Mathf.Max(12f, Screen.height - 114f);
+        GUI.Box(new Rect(12f, y, 284f, 102f), GUIContent.none);
+        string grappleStatus = isGrappling ? "ACTIVE (Q ends)" : AbilityStatus(grappleCooldownRemaining);
+        string leapStatus = leapCharge > 0f
+            ? $"{Mathf.RoundToInt(leapCharge / Mathf.Max(0.01f, leapChargeTime) * 100f)}% - release C"
+            : AbilityStatus(leapCooldownRemaining);
+        GUI.Label(new Rect(24f, y + 7f, 268f, 23f), $"Q  Grapple   {grappleStatus}", abilityTextStyle);
+        GUI.Label(new Rect(24f, y + 30f, 268f, 23f), $"F  Dash        {AbilityStatus(dashCooldownRemaining)}", abilityTextStyle);
+        GUI.Label(new Rect(24f, y + 53f, 268f, 23f), $"C  Leap        {leapStatus}", abilityTextStyle);
+        GUI.Label(new Rect(24f, y + 79f, 268f, 20f), "Hold C to charge  /  E glider  /  Shift sprint", abilityHintStyle);
+    }
+
+    private static string AbilityStatus(float remaining)
+    {
+        return remaining > 0f ? $"{remaining:0.0}s" : "READY";
     }
 
     private bool TryGetWall(out RaycastHit wallHit, out bool wallOnRight)
